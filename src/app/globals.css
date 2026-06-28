@@ -10,6 +10,20 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  /* Brand coral-orange palette */
+  --color-orange-50:  #fef3f0;
+  --color-orange-100: #fde6df;
+  --color-orange-200: #f9c4b4;
+  --color-orange-300: #f49278;
+  --color-orange-400: #ec7055;
+  --color-orange-500: #E8593C;
+  --color-orange-600: #cf4325;
+}
+
+@keyframes confetti-fall {
+  0%   { transform: translateY(0)     rotate(0deg)   scale(1);   opacity: 1; }
+  85%  { opacity: 1; }
+  100% { transform: translateY(105vh) rotate(600deg) scale(0.7); opacity: 0; }
 }
 
 @media (prefers-color-scheme: dark) {
