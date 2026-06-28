@@ -10,6 +10,12 @@ const TIME_LABEL: Record<string, string> = {
   evening: "Evening · 15–20",
   night:   "Night · 20+",
 };
+const TIME_META: Record<string, { label: string; sub: string }> = {
+  morning: { label: "Morning", sub: "9–12" },
+  noon:    { label: "Noon",    sub: "12–15" },
+  evening: { label: "Evening", sub: "15–20" },
+  night:   { label: "Night",   sub: "20+" },
+};
 
 type EventSlot = { id: string; date: string; time_label: string };
 type Response  = {
@@ -33,6 +39,13 @@ export default function EventClient({ id }: { id: string }) {
   const [copied, setCopied]         = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const confettiShown = useRef(false);
+
+  // Form state
+  const [name, setName]             = useState("");
+  const [selected, setSelected]     = useState<Set<string>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted]   = useState(false);
+  const [formError, setFormError]   = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -75,13 +88,50 @@ export default function EventClient({ id }: { id: string }) {
     return () => { supabase.removeChannel(channel); };
   }, [id]);
 
-  const copyInvite = async () => {
-    await navigator.clipboard.writeText(`${window.location.origin}/event/${id}/respond`);
+  const copyLink = async () => {
+    await navigator.clipboard.writeText(window.location.href);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // ── Derived data ────────────────────────────────────────────
+  const toggle = (slotId: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(slotId) ? next.delete(slotId) : next.add(slotId);
+      return next;
+    });
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setFormError(null);
+
+    const { data: response, error: rErr } = await supabase
+      .from("responses")
+      .insert({ event_id: id, friend_name: name.trim() })
+      .select("id")
+      .single();
+
+    if (rErr || !response) {
+      setFormError("Failed to submit. Please try again.");
+      setSubmitting(false);
+      return;
+    }
+
+    if (selected.size > 0) {
+      const rows = [...selected].map((slot_id) => ({ response_id: response.id, slot_id }));
+      const { error: sErr } = await supabase.from("response_slots").insert(rows);
+      if (sErr) {
+        setFormError("Saved your name but failed to record slot choices.");
+        setSubmitting(false);
+        return;
+      }
+    }
+
+    setSubmitted(true);
+  };
+
+  // ── Derived data ─────────────────────────────────────────────
   const totalResponded = responses.length;
 
   const slotCount = (slotId: string) =>
@@ -105,7 +155,6 @@ export default function EventClient({ id }: { id: string }) {
       .map((s) => s.id)
   );
 
-  // Confetti when any slot hits 100% (with ≥2 responses)
   const hasFullSlot =
     totalResponded >= 2 &&
     eventSlots.some((s) => slotCount(s.id) === totalResponded);
@@ -128,7 +177,7 @@ export default function EventClient({ id }: { id: string }) {
 
       <main className="max-w-lg mx-auto px-4 py-10 space-y-8">
 
-        {/* ── Header ─────────────────────────────────────────── */}
+        {/* ── Header ──────────────────────────────────────────── */}
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1 min-w-0">
             <h1 className="text-2xl font-bold text-gray-900 truncate">{event.title}</h1>
@@ -147,22 +196,104 @@ export default function EventClient({ id }: { id: string }) {
             )}
           </div>
           <button
-            onClick={copyInvite}
+            onClick={copyLink}
             className="shrink-0 px-3 py-1.5 bg-orange-500 text-white text-sm font-medium rounded-lg hover:bg-orange-600 transition-colors"
           >
-            {copied ? "Copied!" : "Copy invite link"}
+            {copied ? "Copied!" : "Copy link"}
           </button>
         </div>
 
-        {/* ── Availability heat map ───────────────────────────── */}
+        {/* ── Availability form ────────────────────────────────── */}
+        <section className="border border-gray-200 rounded-2xl p-5 space-y-5">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Add your availability</h2>
+            <p className="text-sm text-gray-500 mt-0.5">Mark when you can make it.</p>
+          </div>
+
+          {submitted ? (
+            <div className="py-4 text-center space-y-1">
+              <p className="text-3xl">🎉</p>
+              <p className="text-sm font-medium text-gray-900">You&apos;re in, {name}!</p>
+              <p className="text-xs text-gray-500">Your availability has been recorded.</p>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-gray-700">
+                  Your name <span className="text-orange-500">*</span>
+                </label>
+                <input
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Jamie"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent"
+                />
+              </div>
+
+              {sortedDates.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-gray-700">When are you free?</p>
+                  <div className="space-y-4">
+                    {sortedDates.map((date) => {
+                      const d = new Date(date + "T00:00:00");
+                      return (
+                        <div key={date}>
+                          <p className="text-xs font-semibold text-gray-500 mb-2">
+                            {d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
+                          </p>
+                          <div className="grid grid-cols-2 gap-2">
+                            {byDate[date].map((slot) => {
+                              const { label, sub } = TIME_META[slot.time_label];
+                              const on = selected.has(slot.id);
+                              return (
+                                <button
+                                  key={slot.id}
+                                  type="button"
+                                  onClick={() => toggle(slot.id)}
+                                  className={`flex flex-col items-center justify-center min-h-12 rounded-xl border-2 transition-colors ${
+                                    on
+                                      ? "bg-green-500 border-green-500 text-white"
+                                      : "bg-white border-gray-200 text-gray-600 hover:border-green-300"
+                                  }`}
+                                >
+                                  <span className="text-sm font-semibold">{label}</span>
+                                  <span className={`text-xs mt-0.5 ${on ? "text-green-100" : "text-gray-400"}`}>
+                                    {sub}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {formError && <p className="text-sm text-red-500">{formError}</p>}
+
+              <button
+                type="submit"
+                disabled={submitting || !name.trim()}
+                className="w-full bg-orange-500 text-white py-2.5 rounded-xl font-medium hover:bg-orange-600 disabled:opacity-40 transition-colors"
+              >
+                {submitting ? "Submitting…" : "Submit availability"}
+              </button>
+            </form>
+          )}
+        </section>
+
+        {/* ── Results dashboard ────────────────────────────────── */}
         {eventSlots.length > 0 && (
           <section className="space-y-5">
             <div className="flex items-baseline gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-700">
-                Availability
+                Results
               </h2>
               <span className="text-xs text-gray-400">
-                {totalResponded} {totalResponded === 1 ? "response" : "responses"}
+                {totalResponded} {totalResponded === 1 ? "response" : "responses"} · updates live
               </span>
             </div>
 
@@ -207,14 +338,14 @@ export default function EventClient({ id }: { id: string }) {
           </section>
         )}
 
-        {/* ── Friend responses ────────────────────────────────── */}
+        {/* ── Who's responded ──────────────────────────────────── */}
         <section className="space-y-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-700">
             Who&apos;s responded
           </h2>
           {responses.length === 0 ? (
             <p className="text-sm text-gray-400 italic">
-              No responses yet — share the invite link!
+              No responses yet — share this link!
             </p>
           ) : (
             <ul className="divide-y divide-gray-100">

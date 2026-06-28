@@ -6,13 +6,21 @@ export default function Home() {
       <main className="flex flex-col items-center gap-6 text-center px-6">
         <h1 className="text-5xl font-bold tracking-tight text-zinc-900">Let's Eat! 🍜</h1>
         <p className="text-xl text-zinc-500">Find the best time to eat out with your friends</p>
-        <Link
-          href="/create"
-          className="mt-4 rounded-full px-8 py-4 text-lg font-semibold text-white transition-opacity hover:opacity-90"
-          style={{ backgroundColor: "#E8593C" }}
-        >
-          Create a dining plan
-        </Link>
+        <div className="mt-4 flex flex-col sm:flex-row gap-3">
+          <Link
+            href="/create"
+            className="rounded-full px-8 py-4 text-lg font-semibold text-white transition-opacity hover:opacity-90"
+            style={{ backgroundColor: "#E8593C" }}
+          >
+            Create a dining plan
+          </Link>
+          <Link
+            href="/dashboard"
+            className="rounded-full px-8 py-4 text-lg font-semibold text-zinc-700 border-2 border-zinc-300 hover:border-zinc-400 transition-colors"
+          >
+            View dashboard
+          </Link>
+        </div>
       </main>
     </div>
   );
