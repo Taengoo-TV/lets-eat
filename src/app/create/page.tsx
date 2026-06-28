@@ -2,19 +2,20 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { DayPicker } from "react-day-picker";
 import "react-day-picker/style.css";
 import { supabase } from "@/lib/supabase";
 
 const TIME_SLOTS = [
-  { value: "morning", label: "Morning", sub: "9–12" },
-  { value: "noon", label: "Noon", sub: "12–15" },
-  { value: "evening", label: "Evening", sub: "15–20" },
-  { value: "night", label: "Night", sub: "20+" },
+  { value: "morning", label: "Morning", sub: "9-12" },
+  { value: "noon",    label: "Noon",    sub: "12-15" },
+  { value: "evening", label: "Evening", sub: "15-20" },
+  { value: "night",   label: "Night",   sub: "20+" },
 ];
 
 const RESTAURANT_TYPES = [
-  "Thai", "Japanese", "Korean", "Hotpot", "BBQ", "Café", "Italian", "Other",
+  "Thai", "Japanese", "Korean", "Hotpot", "BBQ", "Cafe", "Italian", "Other",
 ];
 
 function toDateKey(d: Date) {
@@ -23,14 +24,14 @@ function toDateKey(d: Date) {
 
 export default function CreatePage() {
   const router = useRouter();
-  const [title, setTitle] = useState("");
+  const [title, setTitle]     = useState("");
   const [yourName, setYourName] = useState("");
-  const [dates, setDates] = useState<Date[]>([]);
-  const [slots, setSlots] = useState<Record<string, string[]>>({});
+  const [dates, setDates]     = useState<Date[]>([]);
+  const [slots, setSlots]     = useState<Record<string, string[]>>({});
   const [location, setLocation] = useState("");
   const [cuisines, setCuisines] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError]     = useState<string | null>(null);
 
   const toggleSlot = (dateKey: string, slot: string) =>
     setSlots((prev) => {
@@ -91,132 +92,143 @@ export default function CreatePage() {
   const sortedDates = [...dates].sort((a, b) => a.getTime() - b.getTime());
 
   return (
-    <main className="max-w-lg mx-auto px-4 py-10 space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Plan a meal</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Fill in the details and share the link with your group.
-        </p>
-      </div>
+    <div className="min-h-[100dvh] bg-stone-50">
+      <nav className="px-5 py-4 flex items-center border-b border-stone-100 max-w-lg mx-auto">
+        <Link href="/" className="font-bold text-stone-900 tracking-tight">
+          Let&apos;s Eat!
+        </Link>
+      </nav>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Title */}
-        <Field label="Event title" required>
-          <input
-            required
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Friday night dinner"
-            className={input}
-          />
-        </Field>
+      <main className="max-w-lg mx-auto px-5 py-8 space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-stone-900 tracking-tight">Plan a meal</h1>
+          <p className="text-sm text-stone-500 mt-1">
+            Fill in the details and share the link with your group.
+          </p>
+        </div>
 
-        {/* Your name */}
-        <Field label="Your name">
-          <input
-            value={yourName}
-            onChange={(e) => setYourName(e.target.value)}
-            placeholder="Alex"
-            className={input}
-          />
-        </Field>
-
-        {/* Date picker */}
-        <Field label="Pick dates" required>
-          <div className="border border-gray-200 rounded-xl w-fit overflow-hidden">
-            <DayPicker
-              mode="multiple"
-              selected={dates}
-              onSelect={(d) => setDates(d ?? [])}
-              disabled={{ before: new Date() }}
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <Field label="Event title" required>
+            <input
+              required
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Friday night dinner"
+              className={input}
             />
-          </div>
-          {dates.length > 0 && (
-            <p className="text-xs text-gray-400 mt-1">{dates.length} date{dates.length > 1 ? "s" : ""} selected</p>
-          )}
-        </Field>
+          </Field>
 
-        {/* Time slots per date */}
-        {sortedDates.length > 0 && (
-          <Field label="Time slots">
-            <div className="space-y-4">
-              {sortedDates.map((date) => {
-                const key = toDateKey(date);
-                const active = slots[key] ?? [];
-                return (
-                  <div key={key}>
-                    <p className="text-xs font-medium text-gray-500 mb-2">
-                      {date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {TIME_SLOTS.map(({ value, label, sub }) => (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => toggleSlot(key, value)}
-                          className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
-                            active.includes(value)
-                              ? "bg-orange-500 text-white border-orange-500"
-                              : "bg-white text-gray-700 border-gray-300 hover:border-orange-300"
-                          }`}
-                        >
-                          {label} <span className="text-xs opacity-70">{sub}</span>
-                        </button>
-                      ))}
+          <Field label="Your name">
+            <input
+              value={yourName}
+              onChange={(e) => setYourName(e.target.value)}
+              placeholder="Alex"
+              className={input}
+            />
+          </Field>
+
+          <Field label="Pick dates" required>
+            <div className="border border-stone-200 rounded-2xl overflow-hidden w-fit bg-white">
+              <DayPicker
+                mode="multiple"
+                selected={dates}
+                onSelect={(d) => setDates(d ?? [])}
+                disabled={{ before: new Date() }}
+              />
+            </div>
+            {dates.length > 0 && (
+              <p className="text-xs text-stone-400 mt-1.5">
+                {dates.length} date{dates.length > 1 ? "s" : ""} selected
+              </p>
+            )}
+          </Field>
+
+          {sortedDates.length > 0 && (
+            <Field label="Time slots">
+              <div className="space-y-4">
+                {sortedDates.map((date) => {
+                  const key  = toDateKey(date);
+                  const active = slots[key] ?? [];
+                  return (
+                    <div key={key}>
+                      <p className="text-xs font-semibold text-stone-500 mb-2.5">
+                        {date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}
+                      </p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {TIME_SLOTS.map(({ value, label, sub }) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => toggleSlot(key, value)}
+                            className={`flex flex-col items-center justify-center py-3 px-2 rounded-2xl border-2 transition-all active:scale-[0.97] ${
+                              active.includes(value)
+                                ? "bg-orange-500 text-white border-orange-500"
+                                : "bg-white text-stone-700 border-stone-200 hover:border-orange-300"
+                            }`}
+                          >
+                            <span className="text-sm font-semibold">{label}</span>
+                            <span className={`text-xs mt-0.5 ${active.includes(value) ? "text-orange-100" : "text-stone-400"}`}>
+                              {sub}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
+            </Field>
+          )}
+
+          <Field label="Location / area">
+            <input
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Sukhumvit, Bangkok"
+              className={input}
+            />
+          </Field>
+
+          <Field label="Restaurant type">
+            <div className="flex flex-wrap gap-2">
+              {RESTAURANT_TYPES.map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => toggleCuisine(type)}
+                  className={`px-3.5 py-1.5 rounded-full text-sm font-medium border-2 transition-all active:scale-[0.97] ${
+                    cuisines.includes(type)
+                      ? "bg-orange-500 text-white border-orange-500"
+                      : "bg-white text-stone-700 border-stone-200 hover:border-orange-300"
+                  }`}
+                >
+                  {type}
+                </button>
+              ))}
             </div>
           </Field>
-        )}
 
-        {/* Location */}
-        <Field label="Location / area">
-          <input
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="Sukhumvit, Bangkok"
-            className={input}
-          />
-        </Field>
+          {error && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+              {error}
+            </p>
+          )}
 
-        {/* Restaurant types */}
-        <Field label="Restaurant type">
-          <div className="flex flex-wrap gap-2">
-            {RESTAURANT_TYPES.map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => toggleCuisine(type)}
-                className={`px-3 py-1.5 rounded-full text-sm border transition-colors ${
-                  cuisines.includes(type)
-                    ? "bg-orange-500 text-white border-orange-500"
-                    : "bg-white text-gray-700 border-gray-300 hover:border-orange-300"
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-        </Field>
-
-        {error && <p className="text-sm text-red-500">{error}</p>}
-
-        <button
-          type="submit"
-          disabled={submitting || !title || dates.length === 0}
-          className="w-full bg-orange-500 text-white py-2.5 rounded-xl font-medium hover:bg-orange-600 disabled:opacity-40 transition-colors"
-        >
-          {submitting ? "Creating…" : "Create event →"}
-        </button>
-      </form>
-    </main>
+          <button
+            type="submit"
+            disabled={submitting || !title || dates.length === 0}
+            className="w-full bg-orange-500 text-white py-3.5 rounded-full font-semibold text-base hover:bg-orange-600 disabled:opacity-40 active:scale-[0.98] transition-all"
+          >
+            {submitting ? "Creating..." : "Create event"}
+          </button>
+        </form>
+      </main>
+    </div>
   );
 }
 
 const input =
-  "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent";
+  "w-full border-2 border-stone-200 rounded-xl px-3.5 py-2.5 text-sm bg-white text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-orange-400 focus:border-transparent transition-all";
 
 function Field({
   label,
@@ -228,8 +240,8 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
-      <label className="text-sm font-medium text-gray-700">
+    <div className="space-y-2">
+      <label className="text-sm font-semibold text-stone-700 block">
         {label}
         {required && <span className="text-orange-500 ml-0.5">*</span>}
       </label>

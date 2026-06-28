@@ -35,7 +35,7 @@ function bestSlot(event: Event): string | null {
   const slot = event.event_slots.find((s) => s.id === topId);
   if (!slot) return null;
   const date = new Date(slot.date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  return `${date} · ${TIME_LABEL[slot.time_label] ?? slot.time_label}`;
+  return `${date}, ${TIME_LABEL[slot.time_label] ?? slot.time_label}`;
 }
 
 export default function DashboardPage() {
@@ -121,7 +121,7 @@ export default function DashboardPage() {
                   <span>{count} {count === 1 ? "response" : "responses"}</span>
                   {best && (
                     <>
-                      <span className="text-gray-300">·</span>
+                      <span className="text-stone-300">/</span>
                       <span className="text-green-600 font-medium">★ {best}</span>
                     </>
                   )}

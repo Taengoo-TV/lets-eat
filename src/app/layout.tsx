@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: { template: "%s | Let's Eat!", default: "Let's Eat!" },
-  description: "Plan your next meal with friends — pick dates, times, and cuisine together.",
+  description: "Plan your next meal with friends. Pick dates, times, and cuisine together.",
   icons: {
     icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍜</text></svg>",
   },

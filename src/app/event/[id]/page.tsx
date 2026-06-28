@@ -26,13 +26,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     dates.length === 0 ? "" :
     dates.length === 1
       ? new Date(dates[0] + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })
-      : `${new Date(dates[0] + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(dates[dates.length - 1] + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+      : `${new Date(dates[0] + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${new Date(dates[dates.length - 1] + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
 
   const description = [
     `${event.created_by} is planning a meal`,
     dateRange,
     event.restaurant_types?.join(", "),
-  ].filter(Boolean).join(" · ");
+  ].filter(Boolean).join(", ");
 
   return {
     title: event.title,
