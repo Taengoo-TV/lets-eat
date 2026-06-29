@@ -21,51 +21,64 @@ type Vote = {
 };
 
 type ViewMode = "byDate" | "byDateTime" | "calendar";
-type ColorMode = "place" | "food";
+type ColorMode = "people" | "place" | "food";
 type ChartEntry = Record<string, number | string>;
 
 const NO_PREF = "No preference";
 const GRAY = "#E5E7EB";
 
-// Bar total = unique free friends per date; each friend counted once (their first preference)
-function buildDateChart(
-  votes: Vote[],
+function allDates(votes: Vote[]): string[] {
+  const s = new Set<string>();
+  for (const v of votes) for (const dk of Object.keys(v.date_time_slots)) s.add(dk);
+  return [...s].sort();
+}
+
+// Fill chart entry for a set of free friends. People mode: 1 per friend.
+// Place/food: proportional share split across all selections, "No preference" if none.
+function fillEntry(
+  entry: ChartEntry,
+  freeVotes: Vote[],
   colorMode: ColorMode,
   prefKeys: string[],
-): ChartEntry[] {
-  const dateSet = new Set<string>();
-  for (const v of votes) for (const dk of Object.keys(v.date_time_slots)) dateSet.add(dk);
+) {
+  for (const k of prefKeys) entry[k] = 0;
+  let total = 0;
+  for (const v of freeVotes) {
+    total++;
+    if (colorMode === "people") {
+      entry[v.friend_name] = 1;
+    } else {
+      const prefs = colorMode === "place" ? v.preferred_places : v.preferred_food_types;
+      if (prefs.length === 0) {
+        (entry[NO_PREF] as number) += 1;
+      } else {
+        const share = 1 / prefs.length;
+        for (const p of prefs) {
+          if (p in entry) (entry[p] as number) += share;
+        }
+      }
+    }
+  }
+  entry.total = total;
+}
 
-  return [...dateSet].sort().map(date => {
+function buildDateChart(votes: Vote[], colorMode: ColorMode, prefKeys: string[]): ChartEntry[] {
+  return allDates(votes).map(date => {
     const d = new Date(`${date}T12:00:00`);
     const label = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
     const entry: ChartEntry = { date: label, rawDate: date };
-    for (const k of prefKeys) entry[k] = 0;
-
-    let total = 0;
-    for (const v of votes) {
-      const slots = v.date_time_slots[date];
-      if (!slots || slots.length === 0) continue;
-      const prefs = colorMode === "place" ? v.preferred_places : v.preferred_food_types;
-      const first = prefs[0] ?? NO_PREF;
-      (entry[first] as number)++;
-      total++;
-    }
-    entry.total = total;
+    const free = votes.filter(v => { const s = v.date_time_slots[date]; return s && s.length > 0; });
+    fillEntry(entry, free, colorMode, prefKeys);
     return entry;
   });
 }
 
-// Bar total = unique free friends per date×slot; separator entries between date groups
 function buildDateTimeChart(
   votes: Vote[],
   colorMode: ColorMode,
   prefKeys: string[],
 ): { data: ChartEntry[]; separators: string[] } {
-  const dateSet = new Set<string>();
-  for (const v of votes) for (const dk of Object.keys(v.date_time_slots)) dateSet.add(dk);
-  const sortedDates = [...dateSet].sort();
-
+  const sortedDates = allDates(votes);
   const data: ChartEntry[] = [];
   const separators: string[] = [];
 
@@ -78,21 +91,10 @@ function buildDateTimeChart(
       data.push(sep);
       separators.push(sepKey);
     }
-
     for (const time of ["Morning", "Afternoon", "Evening"]) {
       const entry: ChartEntry = { slot: `${date}_${time}` };
-      for (const k of prefKeys) entry[k] = 0;
-
-      let total = 0;
-      for (const v of votes) {
-        const slots = v.date_time_slots[date];
-        if (!slots || !slots.includes(time)) continue;
-        const prefs = colorMode === "place" ? v.preferred_places : v.preferred_food_types;
-        const first = prefs[0] ?? NO_PREF;
-        (entry[first] as number)++;
-        total++;
-      }
-      entry.total = total;
+      const free = votes.filter(v => { const s = v.date_time_slots[date]; return s && s.includes(time); });
+      fillEntry(entry, free, colorMode, prefKeys);
       data.push(entry);
     }
   });
@@ -134,6 +136,7 @@ function FriendAvatar({ name }: { name: string }) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function totalLabel(chartData: ChartEntry[]) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (props: any) => {
     const total = chartData[props.index ?? 0]?.total as number ?? 0;
     if (!total || props.x == null) return null;
@@ -152,10 +155,36 @@ function totalLabel(chartData: ChartEntry[]) {
   };
 }
 
+// Custom tooltip for "people" stack mode — shows only friends who are free
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function PeopleTooltip({ active, payload, label }: any) {
+  if (!active || !payload) return null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const free: string[] = (payload as any[]).filter(p => (p.value ?? 0) > 0).map((p: any) => p.name);
+  if (!free.length) return null;
+  // Format slot key ("2026-07-01_Morning") to human-readable; plain date strings pass through
+  const displayLabel = (() => {
+    const l = String(label ?? "");
+    if (/^\d{4}-\d{2}-\d{2}_/.test(l)) {
+      const parts = l.split("_");
+      const time = parts.pop() ?? "";
+      const d = new Date(`${parts.join("-")}T12:00:00`);
+      return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} · ${time}`;
+    }
+    return l;
+  })();
+  return (
+    <div className="bg-white border border-stone-200 rounded-lg px-3 py-2 text-xs shadow-md max-w-[200px]">
+      <p className="font-semibold text-stone-700 mb-1">{displayLabel}</p>
+      <p className="text-stone-600 leading-relaxed">{free.join(", ")}</p>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [votes, setVotes] = useState<Vote[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("byDate");
-  const [colorMode, setColorMode] = useState<ColorMode>("place");
+  const [colorMode, setColorMode] = useState<ColorMode>("people");
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
   const [calMonth, setCalMonth] = useState(new Date());
   const [loading, setLoading] = useState(true);
@@ -177,10 +206,15 @@ export default function DashboardPage() {
     return () => { supabase.removeChannel(ch); };
   }, [fetchVotes]);
 
-  const prefKeys = colorMode === "place" ? [...PLACES, NO_PREF] : [...FOOD_TYPES, NO_PREF];
-  const colorMap: Record<string, string> = colorMode === "place"
-    ? { ...PLACE_COLORS, [NO_PREF]: GRAY }
-    : { ...FOOD_COLORS, [NO_PREF]: GRAY };
+  const prefKeys: string[] = colorMode === "people"
+    ? ([...FRIENDS] as string[])
+    : colorMode === "place" ? [...PLACES, NO_PREF] : [...FOOD_TYPES, NO_PREF];
+
+  const colorMap: Record<string, string> = colorMode === "people"
+    ? Object.fromEntries(FRIENDS.map(f => [f, friendBg(f)]))
+    : colorMode === "place"
+      ? { ...PLACE_COLORS, [NO_PREF]: GRAY }
+      : { ...FOOD_COLORS, [NO_PREF]: GRAY };
 
   const respondedNames = new Set(votes.map(v => v.friend_name));
   const pending = FRIENDS.filter(f => !respondedNames.has(f));
@@ -196,6 +230,36 @@ export default function DashboardPage() {
   const calMonthIdx = calMonth.getMonth();
   const calRows = calendarGrid(calYear, calMonthIdx);
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  // Tooltip for place/food proportional mode — formats decimals to 1dp
+  const prefTooltip = (
+    <Tooltip
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      formatter={(value: any) =>
+        typeof value === "number" && value % 1 !== 0 ? value.toFixed(1) : value
+      }
+    />
+  );
+
+  // Shared bar elements for a given chart dataset
+  function bars(chartData: ChartEntry[], xAxisId?: number) {
+    return prefKeys.map((k, ki) => (
+      <Bar
+        key={k}
+        dataKey={k}
+        stackId="a"
+        fill={colorMap[k]}
+        name={k}
+        isAnimationActive={false}
+        {...(xAxisId != null ? { xAxisId } : {})}
+      >
+        {ki === prefKeys.length - 1 && (
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          <LabelList content={totalLabel(chartData) as any} />
+        )}
+      </Bar>
+    ));
+  }
 
   return (
     <main className="max-w-3xl mx-auto px-4 py-8 space-y-6">
@@ -244,11 +308,11 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Color mode toggle — only for chart views */}
+      {/* Stack-by toggle — only for chart views */}
       {viewMode !== "calendar" && (
         <div className="flex items-center gap-2">
           <span className="text-sm text-stone-500">Stack by:</span>
-          {(["place", "food"] as const).map(m => (
+          {(["people", "place", "food"] as const).map(m => (
             <button
               key={m}
               onClick={() => setColorMode(m)}
@@ -258,7 +322,7 @@ export default function DashboardPage() {
                 color: colorMode === m ? "white" : "#57534e",
               }}
             >
-              {m === "place" ? "Place" : "Food type"}
+              {m === "people" ? "People" : m === "place" ? "Place" : "Food type"}
             </button>
           ))}
         </div>
@@ -284,14 +348,10 @@ export default function DashboardPage() {
                 interval={0}
               />
               <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={28} />
-              <Tooltip />
-              {prefKeys.map((k, ki) => (
-                <Bar key={k} dataKey={k} stackId="a" fill={colorMap[k]} name={k} isAnimationActive={false}>
-                  {ki === prefKeys.length - 1 && (
-                    <LabelList content={totalLabel(dateChartData) as any} />
-                  )}
-                </Bar>
-              ))}
+              {colorMode === "people"
+                ? <Tooltip content={<PeopleTooltip />} />
+                : prefTooltip}
+              {bars(dateChartData)}
             </BarChart>
           )}
         </div>
@@ -317,10 +377,10 @@ export default function DashboardPage() {
                 interval={0}
                 tickFormatter={(slot: string) => {
                   if (slot.startsWith("sep_")) return "";
-                  return (slot.split("_").pop() ?? slot);
+                  return slot.split("_").pop() ?? slot;
                 }}
               />
-              {/* Date row — label appears once centered under "Afternoon" slot */}
+              {/* Date row — label centered under "Afternoon" slot */}
               <XAxis
                 xAxisId={1}
                 dataKey="slot"
@@ -336,17 +396,25 @@ export default function DashboardPage() {
                 }}
               />
               <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={28} />
-              <Tooltip
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                labelFormatter={(slot: any) => {
-                  if (typeof slot !== "string" || slot.startsWith("sep_")) return "";
-                  const parts = slot.split("_");
-                  const time = parts.pop() ?? "";
-                  const dateStr = parts.join("-");
-                  const d = new Date(`${dateStr}T12:00:00`);
-                  return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} · ${time}`;
-                }}
-              />
+              {colorMode === "people"
+                ? <Tooltip content={<PeopleTooltip />} />
+                : (
+                  <Tooltip
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    formatter={(value: any) =>
+                      typeof value === "number" && value % 1 !== 0 ? value.toFixed(1) : value
+                    }
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    labelFormatter={(slot: any) => {
+                      if (typeof slot !== "string" || slot.startsWith("sep_")) return "";
+                      const parts = slot.split("_");
+                      const time = parts.pop() ?? "";
+                      const dateStr = parts.join("-");
+                      const d = new Date(`${dateStr}T12:00:00`);
+                      return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} · ${time}`;
+                    }}
+                  />
+                )}
               {dateTimeData.separators.map(sepKey => (
                 <ReferenceLine
                   key={sepKey}
@@ -356,13 +424,7 @@ export default function DashboardPage() {
                   stroke="#CBD5E1"
                 />
               ))}
-              {prefKeys.map((k, ki) => (
-                <Bar key={k} dataKey={k} stackId="a" fill={colorMap[k]} name={k} xAxisId={0} isAnimationActive={false}>
-                  {ki === prefKeys.length - 1 && (
-                    <LabelList content={totalLabel(dateTimeData.data) as any} />
-                  )}
-                </Bar>
-              ))}
+              {bars(dateTimeData.data, 0)}
             </BarChart>
           )}
         </div>
@@ -520,15 +582,25 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Legend (chart modes only) — driven from same prefKeys+colorMap as bars */}
+      {/* Legend — chart modes only */}
       {viewMode !== "calendar" && (
         <div className="flex flex-wrap gap-3">
-          {prefKeys.map(k => (
-            <div key={k} className="flex items-center gap-1.5 text-xs text-stone-600">
-              <span className="w-3 h-3 rounded-sm inline-block" style={{ backgroundColor: colorMap[k] }} />
-              {k}
-            </div>
-          ))}
+          {colorMode === "people"
+            ? votes.map(v => (
+                <div key={v.friend_name} className="flex items-center gap-1.5 text-xs text-stone-600">
+                  <span
+                    className="w-3 h-3 rounded-full inline-block"
+                    style={{ backgroundColor: friendBg(v.friend_name) }}
+                  />
+                  {v.friend_name}
+                </div>
+              ))
+            : prefKeys.map(k => (
+                <div key={k} className="flex items-center gap-1.5 text-xs text-stone-600">
+                  <span className="w-3 h-3 rounded-sm inline-block" style={{ backgroundColor: colorMap[k] }} />
+                  {k}
+                </div>
+              ))}
         </div>
       )}
 
