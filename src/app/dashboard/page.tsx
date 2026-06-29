@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ReferenceLine, LabelList } from "recharts";
 import { supabase } from "@/lib/supabase";
 import {
   FRIENDS, PLACES, FOOD_TYPES,
@@ -15,58 +15,89 @@ import {
 type Vote = {
   id: string;
   friend_name: string;
-  selected_dates: string[];
-  selected_time_slots: string[];
+  date_time_slots: Record<string, string[]>;
   preferred_places: string[];
   preferred_food_types: string[];
 };
 
 type ViewMode = "byDate" | "byDateTime" | "calendar";
 type ColorMode = "place" | "food";
+type ChartEntry = Record<string, number | string>;
 
-// Build stacked bar data grouped by date
-function buildDateChart(votes: Vote[], colorMode: ColorMode) {
+const NO_PREF = "No preference";
+const GRAY = "#E5E7EB";
+
+// Bar total = unique free friends per date; each friend counted once (their first preference)
+function buildDateChart(
+  votes: Vote[],
+  colorMode: ColorMode,
+  prefKeys: string[],
+): ChartEntry[] {
   const dateSet = new Set<string>();
-  for (const v of votes) for (const d of v.selected_dates) dateSet.add(d);
-  const prefKeys = colorMode === "place" ? [...PLACES] : [...FOOD_TYPES];
+  for (const v of votes) for (const dk of Object.keys(v.date_time_slots)) dateSet.add(dk);
+
   return [...dateSet].sort().map(date => {
     const d = new Date(`${date}T12:00:00`);
     const label = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-    const counts: Record<string, number | string> = { date: label, rawDate: date };
-    for (const k of prefKeys) counts[k] = 0;
+    const entry: ChartEntry = { date: label, rawDate: date };
+    for (const k of prefKeys) entry[k] = 0;
+
+    let total = 0;
     for (const v of votes) {
-      if (!v.selected_dates.includes(date)) continue;
+      const slots = v.date_time_slots[date];
+      if (!slots || slots.length === 0) continue;
       const prefs = colorMode === "place" ? v.preferred_places : v.preferred_food_types;
-      for (const p of prefs) { if (p in counts) (counts[p] as number)++; }
+      const first = prefs[0] ?? NO_PREF;
+      (entry[first] as number)++;
+      total++;
     }
-    return counts;
+    entry.total = total;
+    return entry;
   });
 }
 
-// Build stacked bar data grouped by date × time slot
-function buildDateTimeChart(votes: Vote[], colorMode: ColorMode) {
+// Bar total = unique free friends per date×slot; separator entries between date groups
+function buildDateTimeChart(
+  votes: Vote[],
+  colorMode: ColorMode,
+  prefKeys: string[],
+): { data: ChartEntry[]; separators: string[] } {
   const dateSet = new Set<string>();
-  for (const v of votes) for (const d of v.selected_dates) dateSet.add(d);
-  const prefKeys = colorMode === "place" ? [...PLACES] : [...FOOD_TYPES];
-  const data: Record<string, number | string>[] = [];
-  for (const date of [...dateSet].sort()) {
-    const d = new Date(`${date}T12:00:00`);
-    const dateLabel = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    for (const time of ["Morning", "Afternoon", "Evening"]) {
-      const counts: Record<string, number | string> = {
-        slot: `${dateLabel} ${time.slice(0, 3)}`,
-      };
-      for (const k of prefKeys) counts[k] = 0;
-      for (const v of votes) {
-        if (!v.selected_dates.includes(date)) continue;
-        if (!v.selected_time_slots.includes(time)) continue;
-        const prefs = colorMode === "place" ? v.preferred_places : v.preferred_food_types;
-        for (const p of prefs) { if (p in counts) (counts[p] as number)++; }
-      }
-      data.push(counts);
+  for (const v of votes) for (const dk of Object.keys(v.date_time_slots)) dateSet.add(dk);
+  const sortedDates = [...dateSet].sort();
+
+  const data: ChartEntry[] = [];
+  const separators: string[] = [];
+
+  sortedDates.forEach((date, i) => {
+    if (i > 0) {
+      const sepKey = `sep_${i}`;
+      const sep: ChartEntry = { slot: sepKey };
+      for (const k of prefKeys) sep[k] = 0;
+      sep.total = 0;
+      data.push(sep);
+      separators.push(sepKey);
     }
-  }
-  return data;
+
+    for (const time of ["Morning", "Afternoon", "Evening"]) {
+      const entry: ChartEntry = { slot: `${date}_${time}` };
+      for (const k of prefKeys) entry[k] = 0;
+
+      let total = 0;
+      for (const v of votes) {
+        const slots = v.date_time_slots[date];
+        if (!slots || !slots.includes(time)) continue;
+        const prefs = colorMode === "place" ? v.preferred_places : v.preferred_food_types;
+        const first = prefs[0] ?? NO_PREF;
+        (entry[first] as number)++;
+        total++;
+      }
+      entry.total = total;
+      data.push(entry);
+    }
+  });
+
+  return { data, separators };
 }
 
 function calendarGrid(year: number, month: number): (number | null)[][] {
@@ -85,7 +116,7 @@ function calendarGrid(year: number, month: number): (number | null)[][] {
   return rows;
 }
 
-function dateKey(year: number, month: number, day: number) {
+function datePadKey(year: number, month: number, day: number) {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
@@ -101,6 +132,26 @@ function FriendAvatar({ name }: { name: string }) {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function totalLabel(chartData: ChartEntry[]) {
+  return (props: any) => {
+    const total = chartData[props.index ?? 0]?.total as number ?? 0;
+    if (!total || props.x == null) return null;
+    return (
+      <text
+        x={props.x + props.width / 2}
+        y={props.y - 4}
+        textAnchor="middle"
+        fontSize={11}
+        fontWeight={600}
+        fill="#374151"
+      >
+        {total}
+      </text>
+    );
+  };
+}
+
 export default function DashboardPage() {
   const [votes, setVotes] = useState<Vote[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("byDate");
@@ -112,7 +163,7 @@ export default function DashboardPage() {
   const fetchVotes = useCallback(async () => {
     const { data } = await supabase
       .from("votes")
-      .select("id,friend_name,selected_dates,selected_time_slots,preferred_places,preferred_food_types");
+      .select("id,friend_name,date_time_slots,preferred_places,preferred_food_types");
     setVotes((data as Vote[]) ?? []);
     setLoading(false);
   }, []);
@@ -126,8 +177,11 @@ export default function DashboardPage() {
     return () => { supabase.removeChannel(ch); };
   }, [fetchVotes]);
 
-  const colors = colorMode === "place" ? PLACE_COLORS : FOOD_COLORS;
-  const prefKeys = colorMode === "place" ? [...PLACES] : [...FOOD_TYPES];
+  const prefKeys = colorMode === "place" ? [...PLACES, NO_PREF] : [...FOOD_TYPES, NO_PREF];
+  const colorMap: Record<string, string> = colorMode === "place"
+    ? { ...PLACE_COLORS, [NO_PREF]: GRAY }
+    : { ...FOOD_COLORS, [NO_PREF]: GRAY };
+
   const respondedNames = new Set(votes.map(v => v.friend_name));
   const pending = FRIENDS.filter(f => !respondedNames.has(f));
 
@@ -135,11 +189,9 @@ export default function DashboardPage() {
     return <main className="text-center py-20 text-stone-400 text-sm">Loading…</main>;
   }
 
-  // ── Chart data ──────────────────────────────────────────────
-  const dateChartData = buildDateChart(votes, colorMode);
-  const dateTimeChartData = buildDateTimeChart(votes, colorMode);
+  const dateChartData = buildDateChart(votes, colorMode, prefKeys);
+  const dateTimeData = buildDateTimeChart(votes, colorMode, prefKeys);
 
-  // ── Calendar ─────────────────────────────────────────────────
   const calYear = calMonth.getFullYear();
   const calMonthIdx = calMonth.getMonth();
   const calRows = calendarGrid(calYear, calMonthIdx);
@@ -156,6 +208,19 @@ export default function DashboardPage() {
         >
           Change my vote
         </Link>
+      </div>
+
+      {/* Stat card */}
+      <div className="rounded-xl border border-stone-100 bg-white px-4 py-3 flex items-center gap-3">
+        <span className="text-2xl font-bold text-stone-900">{votes.length}</span>
+        <span className="text-sm text-stone-500">
+          of {FRIENDS.length} friends have responded
+        </span>
+        {votes.length > 0 && (
+          <span className="ml-auto text-xs text-stone-400">
+            {FRIENDS.length - votes.length} pending
+          </span>
+        )}
       </div>
 
       {/* View mode toggle */}
@@ -209,7 +274,7 @@ export default function DashboardPage() {
               width={Math.max(640, dateChartData.length * 90)}
               height={280}
               data={dateChartData}
-              margin={{ bottom: 65, top: 8, left: 0, right: 8 }}
+              margin={{ bottom: 65, top: 20, left: 0, right: 8 }}
             >
               <XAxis
                 dataKey="date"
@@ -220,8 +285,12 @@ export default function DashboardPage() {
               />
               <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={28} />
               <Tooltip />
-              {prefKeys.map(k => (
-                <Bar key={k} dataKey={k} stackId="a" fill={colors[k]} name={k} />
+              {prefKeys.map((k, ki) => (
+                <Bar key={k} dataKey={k} stackId="a" fill={colorMap[k]} name={k} isAnimationActive={false}>
+                  {ki === prefKeys.length - 1 && (
+                    <LabelList content={totalLabel(dateChartData) as any} />
+                  )}
+                </Bar>
               ))}
             </BarChart>
           )}
@@ -235,22 +304,64 @@ export default function DashboardPage() {
             <p className="text-center text-stone-400 text-sm py-12">No votes yet — be the first!</p>
           ) : (
             <BarChart
-              width={Math.max(640, dateTimeChartData.length * 58)}
-              height={280}
-              data={dateTimeChartData}
-              margin={{ bottom: 70, top: 8, left: 0, right: 8 }}
+              width={Math.max(640, dateTimeData.data.length * 58)}
+              height={320}
+              data={dateTimeData.data}
+              margin={{ bottom: 45, top: 20, left: 0, right: 8 }}
             >
+              {/* Slot row (Morning/Afternoon/Evening) */}
               <XAxis
+                xAxisId={0}
                 dataKey="slot"
-                angle={-45}
-                textAnchor="end"
                 tick={{ fontSize: 9 }}
                 interval={0}
+                tickFormatter={(slot: string) => {
+                  if (slot.startsWith("sep_")) return "";
+                  return (slot.split("_").pop() ?? slot);
+                }}
+              />
+              {/* Date row — label appears once centered under "Afternoon" slot */}
+              <XAxis
+                xAxisId={1}
+                dataKey="slot"
+                tick={{ fontSize: 10, fontWeight: 600, fill: "#374151" }}
+                interval={0}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(slot: string) => {
+                  if (!slot.includes("_Afternoon")) return "";
+                  const date = slot.replace(/_Afternoon$/, "");
+                  const d = new Date(`${date}T12:00:00`);
+                  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                }}
               />
               <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={28} />
-              <Tooltip />
-              {prefKeys.map(k => (
-                <Bar key={k} dataKey={k} stackId="a" fill={colors[k]} name={k} />
+              <Tooltip
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                labelFormatter={(slot: any) => {
+                  if (typeof slot !== "string" || slot.startsWith("sep_")) return "";
+                  const parts = slot.split("_");
+                  const time = parts.pop() ?? "";
+                  const dateStr = parts.join("-");
+                  const d = new Date(`${dateStr}T12:00:00`);
+                  return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} · ${time}`;
+                }}
+              />
+              {dateTimeData.separators.map(sepKey => (
+                <ReferenceLine
+                  key={sepKey}
+                  x={sepKey}
+                  xAxisId={0}
+                  strokeDasharray="4 4"
+                  stroke="#CBD5E1"
+                />
+              ))}
+              {prefKeys.map((k, ki) => (
+                <Bar key={k} dataKey={k} stackId="a" fill={colorMap[k]} name={k} xAxisId={0} isAnimationActive={false}>
+                  {ki === prefKeys.length - 1 && (
+                    <LabelList content={totalLabel(dateTimeData.data) as any} />
+                  )}
+                </Bar>
               ))}
             </BarChart>
           )}
@@ -293,8 +404,8 @@ export default function DashboardPage() {
             <div key={ri} className="grid grid-cols-7 gap-1">
               {row.map((day, ci) => {
                 if (!day) return <div key={ci} className="min-h-[70px]" />;
-                const dk = dateKey(calYear, calMonthIdx, day);
-                const dayVotes = votes.filter(v => v.selected_dates.includes(dk));
+                const dk = datePadKey(calYear, calMonthIdx, day);
+                const dayVotes = votes.filter(v => dk in v.date_time_slots && v.date_time_slots[dk].length > 0);
                 const isExpanded = expandedDate === dk;
                 return (
                   <div
@@ -332,7 +443,7 @@ export default function DashboardPage() {
 
           {/* Expanded date detail */}
           {expandedDate && (() => {
-            const dayVotes = votes.filter(v => v.selected_dates.includes(expandedDate));
+            const dayVotes = votes.filter(v => expandedDate in v.date_time_slots && v.date_time_slots[expandedDate].length > 0);
             const d = new Date(`${expandedDate}T12:00:00`);
             return (
               <div className="mt-2 p-4 rounded-xl border border-orange-200 bg-orange-50 space-y-3">
@@ -347,16 +458,15 @@ export default function DashboardPage() {
                 ) : (
                   <ul className="space-y-2">
                     {dayVotes.map(v => {
-                      const placeChips = v.preferred_places;
-                      const foodChips = v.preferred_food_types;
+                      const timeSlots = v.date_time_slots[expandedDate] ?? [];
                       return (
                         <li key={v.id} className="flex flex-wrap items-start gap-2">
                           <FriendAvatar name={v.friend_name} />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium text-stone-900">{v.friend_name}</p>
-                            {v.selected_time_slots.length > 0 && (
+                            {timeSlots.length > 0 && (
                               <div className="flex flex-wrap gap-1 mt-1">
-                                {v.selected_time_slots.map(t => (
+                                {timeSlots.map(t => (
                                   <span
                                     key={t}
                                     className="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -370,9 +480,9 @@ export default function DashboardPage() {
                                 ))}
                               </div>
                             )}
-                            {(placeChips.length > 0 || foodChips.length > 0) && (
+                            {(v.preferred_places.length > 0 || v.preferred_food_types.length > 0) && (
                               <div className="flex flex-wrap gap-1 mt-1">
-                                {placeChips.map(p => (
+                                {v.preferred_places.map(p => (
                                   <span
                                     key={p}
                                     className="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -384,7 +494,7 @@ export default function DashboardPage() {
                                     {p}
                                   </span>
                                 ))}
-                                {foodChips.map(f => (
+                                {v.preferred_food_types.map(f => (
                                   <span
                                     key={f}
                                     className="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -410,12 +520,12 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Legend (chart modes only) */}
+      {/* Legend (chart modes only) — driven from same prefKeys+colorMap as bars */}
       {viewMode !== "calendar" && (
         <div className="flex flex-wrap gap-3">
           {prefKeys.map(k => (
             <div key={k} className="flex items-center gap-1.5 text-xs text-stone-600">
-              <span className="w-3 h-3 rounded-sm inline-block" style={{ backgroundColor: colors[k] }} />
+              <span className="w-3 h-3 rounded-sm inline-block" style={{ backgroundColor: colorMap[k] }} />
               {k}
             </div>
           ))}
@@ -429,50 +539,52 @@ export default function DashboardPage() {
           <span className="text-stone-400 font-normal">({votes.length}/{FRIENDS.length})</span>
         </h2>
         <ul className="space-y-2">
-          {votes.map(v => (
-            <li key={v.id} className="rounded-xl border border-stone-200 bg-white px-4 py-3 flex items-start gap-3">
-              <FriendAvatar name={v.friend_name} />
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-stone-900">{v.friend_name}</p>
-                {v.selected_dates.length > 0 && (
-                  <p className="text-xs text-stone-400 mt-0.5">
-                    {v.selected_dates.length} date{v.selected_dates.length !== 1 ? "s" : ""}
-                    {v.selected_time_slots.length > 0 && (
-                      <> · {v.selected_time_slots.join(", ")}</>
-                    )}
-                  </p>
-                )}
-                {(v.preferred_places.length > 0 || v.preferred_food_types.length > 0) && (
-                  <div className="flex flex-wrap gap-1 mt-1.5">
-                    {v.preferred_places.map(p => (
-                      <span
-                        key={p}
-                        className="text-xs px-2 py-0.5 rounded-full font-medium"
-                        style={{
-                          backgroundColor: PLACE_CHIP[p]?.bg ?? "#f5f5f4",
-                          color: PLACE_CHIP[p]?.color ?? "#57534e",
-                        }}
-                      >
-                        {p}
-                      </span>
-                    ))}
-                    {v.preferred_food_types.map(f => (
-                      <span
-                        key={f}
-                        className="text-xs px-2 py-0.5 rounded-full font-medium"
-                        style={{
-                          backgroundColor: FOOD_CHIP[f]?.bg ?? "#f5f5f4",
-                          color: FOOD_CHIP[f]?.color ?? "#57534e",
-                        }}
-                      >
-                        {f}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </li>
-          ))}
+          {votes.map(v => {
+            const dateCount = Object.keys(v.date_time_slots).length;
+            const allSlots = [...new Set(Object.values(v.date_time_slots).flat())];
+            return (
+              <li key={v.id} className="rounded-xl border border-stone-200 bg-white px-4 py-3 flex items-start gap-3">
+                <FriendAvatar name={v.friend_name} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-stone-900">{v.friend_name}</p>
+                  {dateCount > 0 && (
+                    <p className="text-xs text-stone-400 mt-0.5">
+                      {dateCount} date{dateCount !== 1 ? "s" : ""}
+                      {allSlots.length > 0 && <> · {allSlots.join(", ")}</>}
+                    </p>
+                  )}
+                  {(v.preferred_places.length > 0 || v.preferred_food_types.length > 0) && (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {v.preferred_places.map(p => (
+                        <span
+                          key={p}
+                          className="text-xs px-2 py-0.5 rounded-full font-medium"
+                          style={{
+                            backgroundColor: PLACE_CHIP[p]?.bg ?? "#f5f5f4",
+                            color: PLACE_CHIP[p]?.color ?? "#57534e",
+                          }}
+                        >
+                          {p}
+                        </span>
+                      ))}
+                      {v.preferred_food_types.map(f => (
+                        <span
+                          key={f}
+                          className="text-xs px-2 py-0.5 rounded-full font-medium"
+                          style={{
+                            backgroundColor: FOOD_CHIP[f]?.bg ?? "#f5f5f4",
+                            color: FOOD_CHIP[f]?.color ?? "#57534e",
+                          }}
+                        >
+                          {f}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </li>
+            );
+          })}
           {pending.map(f => (
             <li key={f} className="rounded-xl border border-stone-100 px-4 py-3 flex items-center gap-3">
               <div className="w-8 h-8 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-400">

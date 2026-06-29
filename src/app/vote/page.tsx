@@ -4,11 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DayPicker } from "react-day-picker";
 import { supabase } from "@/lib/supabase";
-import {
-  TIME_SLOTS, TIME_SLOT_STYLES,
-  PLACES, FOOD_TYPES,
-  PLACE_CHIP, FOOD_CHIP,
-} from "@/lib/constants";
+import { TIME_SLOTS, TIME_SLOT_STYLES, PLACES, FOOD_TYPES, PLACE_CHIP, FOOD_CHIP } from "@/lib/constants";
 
 function localDateKey(d: Date) {
   const y = d.getFullYear();
@@ -20,7 +16,8 @@ function localDateKey(d: Date) {
 export default function VotePage() {
   const [name, setName] = useState("");
   const [selectedDates, setSelectedDates] = useState<Date[]>([]);
-  const [timeSlots, setTimeSlots] = useState<Set<string>>(new Set());
+  // { "2026-06-30": ["Morning", "Evening"], ... }
+  const [dateTimeSlots, setDateTimeSlots] = useState<Record<string, string[]>>({});
   const [places, setPlaces] = useState<Set<string>>(new Set());
   const [foods, setFoods] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
@@ -32,38 +29,67 @@ export default function VotePage() {
     setName(n);
     supabase
       .from("votes")
-      .select("selected_dates,selected_time_slots,preferred_places,preferred_food_types")
+      .select("date_time_slots,preferred_places,preferred_food_types")
       .eq("friend_name", n)
       .maybeSingle()
       .then(({ data }) => {
         if (data) {
-          // Parse date strings back to noon-anchored Date objects (avoids UTC rollback)
-          setSelectedDates(
-            (data.selected_dates ?? []).map((s: string) => new Date(`${s}T12:00:00`))
-          );
-          setTimeSlots(new Set(data.selected_time_slots ?? []));
+          const map = (data.date_time_slots ?? {}) as Record<string, string[]>;
+          const dates = Object.keys(map).map(s => new Date(`${s}T12:00:00`));
+          setSelectedDates(dates);
+          setDateTimeSlots(map);
           setPlaces(new Set(data.preferred_places ?? []));
           setFoods(new Set(data.preferred_food_types ?? []));
         }
       });
   }, [router]);
 
-  function toggle<T>(set: Set<T>, key: T, setter: (s: Set<T>) => void) {
+  const handleDatesChange = (dates: Date[] | undefined) => {
+    const next = dates ?? [];
+    setSelectedDates(next);
+    // Preserve existing slot selections; prune removed dates
+    setDateTimeSlots(prev => {
+      const updated: Record<string, string[]> = {};
+      for (const d of next) {
+        const key = localDateKey(d);
+        updated[key] = prev[key] ?? [];
+      }
+      return updated;
+    });
+  };
+
+  const toggleTimeSlot = (dateKey: string, slot: string) => {
+    setDateTimeSlots(prev => {
+      const current = prev[dateKey] ?? [];
+      const next = current.includes(slot)
+        ? current.filter(s => s !== slot)
+        : [...current, slot];
+      return { ...prev, [dateKey]: next };
+    });
+  };
+
+  function toggleSet<T>(set: Set<T>, key: T, setter: (s: Set<T>) => void) {
     const next = new Set(set);
     next.has(key) ? next.delete(key) : next.add(key);
     setter(next);
   }
 
-  const canSubmit = selectedDates.length > 0 && timeSlots.size > 0 && !submitting;
+  const sortedDates = [...selectedDates].sort((a, b) => a.getTime() - b.getTime());
+  const hasAnySlot = Object.values(dateTimeSlots).some(s => s.length > 0);
+  const canSubmit = selectedDates.length > 0 && hasAnySlot && !submitting;
 
   const submit = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
+    // Only persist dates that have at least one slot selected
+    const filtered: Record<string, string[]> = {};
+    for (const [date, slots] of Object.entries(dateTimeSlots)) {
+      if (slots.length > 0) filtered[date] = slots;
+    }
     await supabase.from("votes").upsert(
       {
         friend_name: name,
-        selected_dates: selectedDates.map(localDateKey),
-        selected_time_slots: [...timeSlots],
+        date_time_slots: filtered,
         preferred_places: [...places],
         preferred_food_types: [...foods],
         submitted_at: new Date().toISOString(),
@@ -75,13 +101,15 @@ export default function VotePage() {
 
   if (!name) return null;
 
+  const today = new Date();
+
   return (
     <main className="max-w-lg mx-auto px-4 pt-8 pb-28 space-y-8">
       <h1 className="text-2xl font-bold text-stone-900">
         Hey {name}! When are you free? 👋
       </h1>
 
-      {/* Date picker */}
+      {/* Calendar */}
       <section className="space-y-3">
         <h2 className="font-semibold text-stone-700">
           Pick your free dates{" "}
@@ -91,14 +119,12 @@ export default function VotePage() {
           <DayPicker
             mode="multiple"
             selected={selectedDates}
-            onSelect={(dates) => setSelectedDates(dates ?? [])}
-            startMonth={new Date()}
+            onSelect={handleDatesChange}
+            startMonth={today}
+            disabled={{ before: today }}
             modifiersStyles={{
-              selected: {
-                backgroundColor: "#E8593C",
-                color: "white",
-                borderRadius: "50%",
-              },
+              selected: { backgroundColor: "#E8593C", color: "white", borderRadius: "50%" },
+              disabled: { color: "#d4d4d4" },
             }}
           />
         </div>
@@ -109,35 +135,49 @@ export default function VotePage() {
         )}
       </section>
 
-      {/* Time slot chips */}
-      <section className="space-y-3">
-        <h2 className="font-semibold text-stone-700">
-          Which times work?{" "}
-          <span className="text-stone-400 font-normal text-sm">(pick all that apply)</span>
-        </h2>
-        <div className="grid grid-cols-3 gap-3">
-          {TIME_SLOTS.map(slot => {
-            const active = timeSlots.has(slot.key);
-            const style = TIME_SLOT_STYLES[slot.key];
+      {/* Per-date time slot selection */}
+      {sortedDates.length > 0 && (
+        <section className="space-y-4">
+          <h2 className="font-semibold text-stone-700">
+            Which times work for each date?{" "}
+            <span className="text-stone-400 font-normal text-sm">(select per day)</span>
+          </h2>
+          {sortedDates.map(date => {
+            const dk = localDateKey(date);
+            const selected = dateTimeSlots[dk] ?? [];
+            const dayLabel = date.toLocaleDateString("en-US", {
+              weekday: "long", month: "short", day: "numeric",
+            });
             return (
-              <button
-                key={slot.key}
-                onClick={() => toggle(timeSlots, slot.key, setTimeSlots)}
-                className="flex flex-col items-center gap-1 px-3 py-4 rounded-xl border-2 transition-colors text-center"
-                style={{
-                  backgroundColor: active ? style.bg : "white",
-                  borderColor: active ? style.color : "#e7e5e4",
-                  color: active ? style.color : "#57534e",
-                }}
-              >
-                <span className="text-2xl">{slot.emoji}</span>
-                <span className="font-semibold text-sm">{slot.key}</span>
-                <span className="text-xs opacity-70 leading-tight">{slot.hours}</span>
-              </button>
+              <div key={dk} className="bg-white rounded-xl border border-stone-100 p-4 space-y-3">
+                <p className="text-sm font-semibold text-stone-700">📅 {dayLabel}</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {TIME_SLOTS.map(slot => {
+                    const active = selected.includes(slot.key);
+                    const style = TIME_SLOT_STYLES[slot.key];
+                    return (
+                      <button
+                        key={slot.key}
+                        onClick={() => toggleTimeSlot(dk, slot.key)}
+                        className="flex flex-col items-center gap-0.5 px-2 py-3 rounded-xl border-2 transition-colors text-center"
+                        style={{
+                          backgroundColor: active ? style.bg : "white",
+                          borderColor: active ? style.color : "#e7e5e4",
+                          color: active ? style.color : "#57534e",
+                        }}
+                      >
+                        <span className="text-xl">{slot.emoji}</span>
+                        <span className="font-semibold text-xs">{slot.key}</span>
+                        <span className="text-xs opacity-70 leading-tight">{slot.hours}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             );
           })}
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Preferred places */}
       <section className="space-y-3">
@@ -152,7 +192,7 @@ export default function VotePage() {
             return (
               <button
                 key={p}
-                onClick={() => toggle(places, p, setPlaces)}
+                onClick={() => toggleSet(places, p, setPlaces)}
                 className="px-4 py-2 rounded-full border-2 text-sm font-medium transition-colors"
                 style={{
                   backgroundColor: active ? chip.bg : "white",
@@ -180,7 +220,7 @@ export default function VotePage() {
             return (
               <button
                 key={f}
-                onClick={() => toggle(foods, f, setFoods)}
+                onClick={() => toggleSet(foods, f, setFoods)}
                 className="px-4 py-2 rounded-full border-2 text-sm font-medium transition-colors"
                 style={{
                   backgroundColor: active ? chip.bg : "white",
@@ -195,7 +235,7 @@ export default function VotePage() {
         </div>
       </section>
 
-      {/* Fixed submit button */}
+      {/* Fixed submit */}
       <div className="fixed bottom-0 left-0 right-0 p-4 bg-stone-50/90 backdrop-blur border-t border-stone-100">
         <div className="max-w-lg mx-auto">
           <button
@@ -206,11 +246,11 @@ export default function VotePage() {
           >
             {submitting ? "Saving…" : "Submit"}
           </button>
-          {(selectedDates.length === 0 || timeSlots.size === 0) && (
+          {(!selectedDates.length || !hasAnySlot) && (
             <p className="text-center text-xs text-stone-400 mt-2">
-              {selectedDates.length === 0
+              {!selectedDates.length
                 ? "Select at least one date to continue"
-                : "Select at least one time slot to continue"}
+                : "Select at least one time slot per date to continue"}
             </p>
           )}
         </div>
