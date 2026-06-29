@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
+import { motion, AnimatePresence } from "framer-motion";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ReferenceLine, LabelList } from "recharts";
 import { supabase } from "@/lib/supabase";
 import {
@@ -25,7 +26,7 @@ type ColorMode = "people" | "place" | "food";
 type ChartEntry = Record<string, number | string>;
 
 const NO_PREF = "No preference";
-const GRAY = "#E5E7EB";
+const GRAY = "#94A3B8";
 
 function allDates(votes: Vote[]): string[] {
   const s = new Set<string>();
@@ -33,14 +34,7 @@ function allDates(votes: Vote[]): string[] {
   return [...s].sort();
 }
 
-// Fill chart entry for a set of free friends. People mode: 1 per friend.
-// Place/food: proportional share split across all selections, "No preference" if none.
-function fillEntry(
-  entry: ChartEntry,
-  freeVotes: Vote[],
-  colorMode: ColorMode,
-  prefKeys: string[],
-) {
+function fillEntry(entry: ChartEntry, freeVotes: Vote[], colorMode: ColorMode, prefKeys: string[]) {
   for (const k of prefKeys) entry[k] = 0;
   let total = 0;
   for (const v of freeVotes) {
@@ -73,11 +67,7 @@ function buildDateChart(votes: Vote[], colorMode: ColorMode, prefKeys: string[])
   });
 }
 
-function buildDateTimeChart(
-  votes: Vote[],
-  colorMode: ColorMode,
-  prefKeys: string[],
-): { data: ChartEntry[]; separators: string[] } {
+function buildDateTimeChart(votes: Vote[], colorMode: ColorMode, prefKeys: string[]): { data: ChartEntry[]; separators: string[] } {
   const sortedDates = allDates(votes);
   const data: ChartEntry[] = [];
   const separators: string[] = [];
@@ -141,28 +131,19 @@ function totalLabel(chartData: ChartEntry[]) {
     const total = chartData[props.index ?? 0]?.total as number ?? 0;
     if (!total || props.x == null) return null;
     return (
-      <text
-        x={props.x + props.width / 2}
-        y={props.y - 4}
-        textAnchor="middle"
-        fontSize={11}
-        fontWeight={600}
-        fill="#374151"
-      >
+      <text x={props.x + props.width / 2} y={props.y - 4} textAnchor="middle" fontSize={11} fontWeight={600} fill="var(--foreground)">
         {total}
       </text>
     );
   };
 }
 
-// Custom tooltip for "people" stack mode — shows only friends who are free
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function PeopleTooltip({ active, payload, label }: any) {
   if (!active || !payload) return null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const free: string[] = (payload as any[]).filter(p => (p.value ?? 0) > 0).map((p: any) => p.name);
   if (!free.length) return null;
-  // Format slot key ("2026-07-01_Morning") to human-readable; plain date strings pass through
   const displayLabel = (() => {
     const l = String(label ?? "");
     if (/^\d{4}-\d{2}-\d{2}_/.test(l)) {
@@ -174,11 +155,30 @@ function PeopleTooltip({ active, payload, label }: any) {
     return l;
   })();
   return (
-    <div className="bg-white border border-stone-200 rounded-lg px-3 py-2 text-xs shadow-md max-w-[200px]">
-      <p className="font-semibold text-stone-700 mb-1">{displayLabel}</p>
-      <p className="text-stone-600 leading-relaxed">{free.join(", ")}</p>
+    <div className="bg-card border border-border rounded-lg px-3 py-2 text-xs shadow-md max-w-[200px]">
+      <p className="font-semibold text-foreground mb-1">{displayLabel}</p>
+      <p className="text-muted-foreground leading-relaxed">{free.join(", ")}</p>
     </div>
   );
+}
+
+function useCountUp(target: number, duration = 800) {
+  const [count, setCount] = useState(0);
+  const prev = useRef(0);
+  useEffect(() => {
+    const start = prev.current;
+    prev.current = target;
+    if (start === target) return;
+    const startTime = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min((now - startTime) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setCount(Math.round(start + (target - start) * eased));
+      if (progress < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }, [target, duration]);
+  return count;
 }
 
 export default function DashboardPage() {
@@ -218,9 +218,14 @@ export default function DashboardPage() {
 
   const respondedNames = new Set(votes.map(v => v.friend_name));
   const pending = FRIENDS.filter(f => !respondedNames.has(f));
+  const countUp = useCountUp(votes.length);
 
   if (loading) {
-    return <main className="text-center py-20 text-stone-400 text-sm">Loading…</main>;
+    return (
+      <div className="flex items-center justify-center min-h-[40vh]">
+        <div className="text-muted-foreground text-sm">Loading…</div>
+      </div>
+    );
   }
 
   const dateChartData = buildDateChart(votes, colorMode, prefKeys);
@@ -231,9 +236,9 @@ export default function DashboardPage() {
   const calRows = calendarGrid(calYear, calMonthIdx);
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-  // Tooltip for place/food proportional mode — formats decimals to 1dp
   const prefTooltip = (
     <Tooltip
+      contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "8px", fontSize: "12px" }}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       formatter={(value: any) =>
         typeof value === "number" && value % 1 !== 0 ? value.toFixed(1) : value
@@ -241,7 +246,6 @@ export default function DashboardPage() {
     />
   );
 
-  // Shared bar elements for a given chart dataset
   function bars(chartData: ChartEntry[], xAxisId?: number) {
     return prefKeys.map((k, ki) => (
       <Bar
@@ -250,7 +254,7 @@ export default function DashboardPage() {
         stackId="a"
         fill={colorMap[k]}
         name={k}
-        isAnimationActive={false}
+        animationDuration={800}
         {...(xAxisId != null ? { xAxisId } : {})}
       >
         {ki === prefKeys.length - 1 && (
@@ -261,65 +265,75 @@ export default function DashboardPage() {
     ));
   }
 
+  const VIEW_TABS: { value: ViewMode; label: string }[] = [
+    { value: "byDate", label: "By Date" },
+    { value: "byDateTime", label: "By Date & Time" },
+    { value: "calendar", label: "Calendar" },
+  ];
+
   return (
     <main className="max-w-3xl mx-auto px-4 py-8 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold text-stone-900">Let&apos;s Eat! — Who&apos;s free when?</h1>
+      {/* Stat card */}
+      <motion.div
+        initial={{ opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+        className="bg-card rounded-2xl border border-border p-6 flex items-center gap-4 shadow-sm"
+      >
+        <div>
+          <span className="text-4xl font-bold text-foreground tabular-nums">{countUp}</span>
+          <span className="text-muted-foreground text-sm"> / {FRIENDS.length}</span>
+        </div>
+        <div className="flex-1">
+          <p className="font-semibold text-foreground text-sm">Friends responded</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {FRIENDS.length - votes.length} still pending
+          </p>
+        </div>
         <Link
           href="/vote"
-          className="shrink-0 px-4 py-2 rounded-full text-sm font-medium border-2 border-stone-200 text-stone-600 hover:bg-stone-100 transition-colors"
+          className="shrink-0 px-4 py-2 rounded-lg text-sm font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         >
-          Change my vote
+          Edit vote
         </Link>
-      </div>
+      </motion.div>
 
-      {/* Stat card */}
-      <div className="rounded-xl border border-stone-100 bg-white px-4 py-3 flex items-center gap-3">
-        <span className="text-2xl font-bold text-stone-900">{votes.length}</span>
-        <span className="text-sm text-stone-500">
-          of {FRIENDS.length} friends have responded
-        </span>
-        {votes.length > 0 && (
-          <span className="ml-auto text-xs text-stone-400">
-            {FRIENDS.length - votes.length} pending
-          </span>
-        )}
-      </div>
-
-      {/* View mode toggle */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {([
-          ["byDate", "By Date"],
-          ["byDateTime", "By Date & Time"],
-          ["calendar", "Calendar view"],
-        ] as const).map(([m, label]) => (
+      {/* View mode tabs */}
+      <div className="flex gap-1 p-1 bg-muted rounded-xl w-fit">
+        {VIEW_TABS.map(tab => (
           <button
-            key={m}
-            onClick={() => setViewMode(m)}
-            className="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+            key={tab.value}
+            onClick={() => setViewMode(tab.value)}
+            className="relative px-3 py-1.5 text-sm font-medium rounded-lg transition-colors"
             style={{
-              backgroundColor: viewMode === m ? "#1c1917" : "#f5f5f4",
-              color: viewMode === m ? "white" : "#57534e",
+              color: viewMode === tab.value ? "var(--foreground)" : "var(--muted-foreground)",
             }}
           >
-            {label}
+            {viewMode === tab.value && (
+              <motion.div
+                layoutId="tab-indicator"
+                className="absolute inset-0 bg-card rounded-lg shadow-sm"
+                transition={{ type: "spring", stiffness: 400, damping: 30 }}
+              />
+            )}
+            <span className="relative z-10">{tab.label}</span>
           </button>
         ))}
       </div>
 
-      {/* Stack-by toggle — only for chart views */}
+      {/* Stack by toggle — chart modes only */}
       {viewMode !== "calendar" && (
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-stone-500">Stack by:</span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-muted-foreground">Stack by:</span>
           {(["people", "place", "food"] as const).map(m => (
             <button
               key={m}
               onClick={() => setColorMode(m)}
-              className="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+              className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all border"
               style={{
-                backgroundColor: colorMode === m ? "#E8593C" : "#f5f5f4",
-                color: colorMode === m ? "white" : "#57534e",
+                backgroundColor: colorMode === m ? "#E8593C" : "transparent",
+                borderColor: colorMode === m ? "#E8593C" : "var(--border)",
+                color: colorMode === m ? "white" : "var(--muted-foreground)",
               }}
             >
               {m === "people" ? "People" : m === "place" ? "Place" : "Food type"}
@@ -328,275 +342,267 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ── Mode 1: By Date ─────────────────────────────────── */}
-      {viewMode === "byDate" && (
-        <div className="overflow-x-auto rounded-2xl border border-stone-100 bg-white p-4">
-          {votes.length === 0 ? (
-            <p className="text-center text-stone-400 text-sm py-12">No votes yet — be the first!</p>
-          ) : (
-            <BarChart
-              width={Math.max(640, dateChartData.length * 90)}
-              height={280}
-              data={dateChartData}
-              margin={{ bottom: 65, top: 20, left: 0, right: 8 }}
-            >
-              <XAxis
-                dataKey="date"
-                angle={-40}
-                textAnchor="end"
-                tick={{ fontSize: 10 }}
-                interval={0}
-              />
-              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={28} />
-              {colorMode === "people"
-                ? <Tooltip content={<PeopleTooltip />} />
-                : prefTooltip}
-              {bars(dateChartData)}
-            </BarChart>
-          )}
-        </div>
-      )}
+      {/* By Date chart */}
+      <AnimatePresence mode="wait">
+        {viewMode === "byDate" && (
+          <motion.div
+            key="byDate"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-x-auto rounded-2xl border border-border bg-card p-4 shadow-sm"
+          >
+            {votes.length === 0 ? (
+              <p className="text-center text-muted-foreground text-sm py-12">No votes yet — be the first!</p>
+            ) : (
+              <BarChart
+                width={Math.max(640, dateChartData.length * 90)}
+                height={280}
+                data={dateChartData}
+                margin={{ bottom: 65, top: 20, left: 0, right: 8 }}
+              >
+                <XAxis dataKey="date" angle={-40} textAnchor="end" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} interval={0} />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} width={28} />
+                {colorMode === "people"
+                  ? <Tooltip content={<PeopleTooltip />} />
+                  : prefTooltip}
+                {bars(dateChartData)}
+              </BarChart>
+            )}
+          </motion.div>
+        )}
 
-      {/* ── Mode 2: By Date & Time ──────────────────────────── */}
-      {viewMode === "byDateTime" && (
-        <div className="overflow-x-auto rounded-2xl border border-stone-100 bg-white p-4">
-          {votes.length === 0 ? (
-            <p className="text-center text-stone-400 text-sm py-12">No votes yet — be the first!</p>
-          ) : (
-            <BarChart
-              width={Math.max(640, dateTimeData.data.length * 58)}
-              height={320}
-              data={dateTimeData.data}
-              margin={{ bottom: 45, top: 20, left: 0, right: 8 }}
-            >
-              {/* Slot row (Morning/Afternoon/Evening) */}
-              <XAxis
-                xAxisId={0}
-                dataKey="slot"
-                tick={{ fontSize: 9 }}
-                interval={0}
-                tickFormatter={(slot: string) => {
-                  if (slot.startsWith("sep_")) return "";
-                  return slot.split("_").pop() ?? slot;
-                }}
-              />
-              {/* Date row — label centered under "Afternoon" slot */}
-              <XAxis
-                xAxisId={1}
-                dataKey="slot"
-                tick={{ fontSize: 10, fontWeight: 600, fill: "#374151" }}
-                interval={0}
-                axisLine={false}
-                tickLine={false}
-                tickFormatter={(slot: string) => {
-                  if (!slot.includes("_Afternoon")) return "";
-                  const date = slot.replace(/_Afternoon$/, "");
-                  const d = new Date(`${date}T12:00:00`);
-                  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-                }}
-              />
-              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={28} />
-              {colorMode === "people"
-                ? <Tooltip content={<PeopleTooltip />} />
-                : (
-                  <Tooltip
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    formatter={(value: any) =>
-                      typeof value === "number" && value % 1 !== 0 ? value.toFixed(1) : value
-                    }
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    labelFormatter={(slot: any) => {
-                      if (typeof slot !== "string" || slot.startsWith("sep_")) return "";
-                      const parts = slot.split("_");
-                      const time = parts.pop() ?? "";
-                      const dateStr = parts.join("-");
-                      const d = new Date(`${dateStr}T12:00:00`);
-                      return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} · ${time}`;
-                    }}
-                  />
-                )}
-              {dateTimeData.separators.map(sepKey => (
-                <ReferenceLine
-                  key={sepKey}
-                  x={sepKey}
+        {/* By Date & Time chart */}
+        {viewMode === "byDateTime" && (
+          <motion.div
+            key="byDateTime"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-x-auto rounded-2xl border border-border bg-card p-4 shadow-sm"
+          >
+            {votes.length === 0 ? (
+              <p className="text-center text-muted-foreground text-sm py-12">No votes yet — be the first!</p>
+            ) : (
+              <BarChart
+                width={Math.max(640, dateTimeData.data.length * 58)}
+                height={320}
+                data={dateTimeData.data}
+                margin={{ bottom: 45, top: 20, left: 0, right: 8 }}
+              >
+                <XAxis
                   xAxisId={0}
-                  strokeDasharray="4 4"
-                  stroke="#CBD5E1"
+                  dataKey="slot"
+                  tick={{ fontSize: 9, fill: "var(--muted-foreground)" }}
+                  interval={0}
+                  tickFormatter={(slot: string) => {
+                    if (slot.startsWith("sep_")) return "";
+                    return slot.split("_").pop() ?? slot;
+                  }}
                 />
+                <XAxis
+                  xAxisId={1}
+                  dataKey="slot"
+                  tick={{ fontSize: 10, fontWeight: 600, fill: "var(--foreground)" }}
+                  interval={0}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={(slot: string) => {
+                    if (!slot.includes("_Afternoon")) return "";
+                    const date = slot.replace(/_Afternoon$/, "");
+                    const d = new Date(`${date}T12:00:00`);
+                    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                  }}
+                />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} width={28} />
+                {colorMode === "people"
+                  ? <Tooltip content={<PeopleTooltip />} />
+                  : (
+                    <Tooltip
+                      contentStyle={{ background: "var(--card)", border: "1px solid var(--border)", borderRadius: "8px", fontSize: "12px" }}
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      formatter={(value: any) =>
+                        typeof value === "number" && value % 1 !== 0 ? value.toFixed(1) : value
+                      }
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      labelFormatter={(slot: any) => {
+                        if (typeof slot !== "string" || slot.startsWith("sep_")) return "";
+                        const parts = slot.split("_");
+                        const time = parts.pop() ?? "";
+                        const dateStr = parts.join("-");
+                        const d = new Date(`${dateStr}T12:00:00`);
+                        return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} · ${time}`;
+                      }}
+                    />
+                  )}
+                {dateTimeData.separators.map(sepKey => (
+                  <ReferenceLine key={sepKey} x={sepKey} xAxisId={0} strokeDasharray="4 4" stroke="var(--border)" />
+                ))}
+                {bars(dateTimeData.data, 0)}
+              </BarChart>
+            )}
+          </motion.div>
+        )}
+
+        {/* Calendar view */}
+        {viewMode === "calendar" && (
+          <motion.div
+            key="calendar"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="rounded-2xl border border-border bg-card p-4 space-y-4 shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => setCalMonth(new Date(calYear, calMonthIdx - 1))}
+                className="p-2 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              >
+                ←
+              </button>
+              <span className="font-semibold text-foreground">
+                {calMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+              </span>
+              <button
+                onClick={() => setCalMonth(new Date(calYear, calMonthIdx + 1))}
+                className="p-2 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              >
+                →
+              </button>
+            </div>
+
+            <div className="grid grid-cols-7 gap-1">
+              {DOW.map(d => (
+                <div key={d} className="text-center text-xs font-medium text-muted-foreground py-1">{d}</div>
               ))}
-              {bars(dateTimeData.data, 0)}
-            </BarChart>
-          )}
-        </div>
-      )}
+            </div>
 
-      {/* ── Mode 3: Calendar view ───────────────────────────── */}
-      {viewMode === "calendar" && (
-        <div className="rounded-2xl border border-stone-100 bg-white p-4 space-y-4">
-          {/* Month navigation */}
-          <div className="flex items-center justify-between">
-            <button
-              onClick={() => setCalMonth(new Date(calYear, calMonthIdx - 1))}
-              className="p-2 rounded-lg hover:bg-stone-100 text-stone-600 transition-colors"
-            >
-              ←
-            </button>
-            <span className="font-semibold text-stone-900">
-              {calMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-            </span>
-            <button
-              onClick={() => setCalMonth(new Date(calYear, calMonthIdx + 1))}
-              className="p-2 rounded-lg hover:bg-stone-100 text-stone-600 transition-colors"
-            >
-              →
-            </button>
-          </div>
-
-          {/* Day headers */}
-          <div className="grid grid-cols-7 gap-1">
-            {DOW.map(d => (
-              <div key={d} className="text-center text-xs font-medium text-stone-400 py-1">
-                {d}
+            {calRows.map((row, ri) => (
+              <div key={ri} className="grid grid-cols-7 gap-1">
+                {row.map((day, ci) => {
+                  if (!day) return <div key={ci} className="min-h-[70px]" />;
+                  const dk = datePadKey(calYear, calMonthIdx, day);
+                  const dayVotes = votes.filter(v => dk in v.date_time_slots && v.date_time_slots[dk].length > 0);
+                  const isExpanded = expandedDate === dk;
+                  return (
+                    <div
+                      key={ci}
+                      onClick={() => setExpandedDate(isExpanded ? null : dk)}
+                      className="min-h-[70px] p-1.5 rounded-lg border cursor-pointer transition-all"
+                      style={{
+                        borderColor: isExpanded ? "#E8593C" : dayVotes.length > 0 ? "var(--border)" : "transparent",
+                        backgroundColor: isExpanded ? "#FEF0EC" : dayVotes.length > 0 ? "var(--muted)" : "transparent",
+                      }}
+                    >
+                      <p className="text-xs font-medium text-muted-foreground mb-1">{day}</p>
+                      <div className="flex flex-wrap gap-0.5">
+                        {dayVotes.slice(0, 4).map(v => (
+                          <span
+                            key={v.id}
+                            className="inline-block text-[9px] font-semibold px-1 py-0.5 rounded-full"
+                            style={{ backgroundColor: friendBg(v.friend_name), color: "#374151" }}
+                            title={v.friend_name}
+                          >
+                            {v.friend_name.slice(0, 3)}
+                          </span>
+                        ))}
+                        {dayVotes.length > 4 && (
+                          <span className="inline-block text-[9px] text-muted-foreground px-0.5 py-0.5">
+                            +{dayVotes.length - 4}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             ))}
-          </div>
 
-          {/* Calendar grid */}
-          {calRows.map((row, ri) => (
-            <div key={ri} className="grid grid-cols-7 gap-1">
-              {row.map((day, ci) => {
-                if (!day) return <div key={ci} className="min-h-[70px]" />;
-                const dk = datePadKey(calYear, calMonthIdx, day);
-                const dayVotes = votes.filter(v => dk in v.date_time_slots && v.date_time_slots[dk].length > 0);
-                const isExpanded = expandedDate === dk;
+            <AnimatePresence>
+              {expandedDate && (() => {
+                const dayVotes = votes.filter(v => expandedDate in v.date_time_slots && v.date_time_slots[expandedDate].length > 0);
+                const d = new Date(`${expandedDate}T12:00:00`);
                 return (
-                  <div
-                    key={ci}
-                    onClick={() => setExpandedDate(isExpanded ? null : dk)}
-                    className="min-h-[70px] p-1.5 rounded-lg border cursor-pointer transition-colors"
-                    style={{
-                      borderColor: isExpanded ? "#E8593C" : dayVotes.length > 0 ? "#e7e5e4" : "#f5f5f4",
-                      backgroundColor: isExpanded ? "#FFF7F5" : dayVotes.length > 0 ? "white" : "#fafaf9",
-                    }}
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 8 }}
+                    transition={{ duration: 0.2 }}
+                    className="mt-2 p-4 rounded-xl border border-[#E8593C]/30 bg-accent space-y-3"
                   >
-                    <p className="text-xs font-medium text-stone-500 mb-1">{day}</p>
-                    <div className="flex flex-wrap gap-0.5">
-                      {dayVotes.slice(0, 4).map(v => (
-                        <span
-                          key={v.id}
-                          className="inline-block text-[9px] font-semibold px-1 py-0.5 rounded-full"
-                          style={{ backgroundColor: friendBg(v.friend_name), color: "#374151" }}
-                          title={v.friend_name}
-                        >
-                          {v.friend_name.slice(0, 3)}
-                        </span>
-                      ))}
-                      {dayVotes.length > 4 && (
-                        <span className="inline-block text-[9px] text-stone-400 px-0.5 py-0.5">
-                          +{dayVotes.length - 4}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                    <h3 className="font-semibold text-foreground">
+                      {d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                      <span className="ml-2 text-sm font-normal text-muted-foreground">
+                        {dayVotes.length} friend{dayVotes.length !== 1 ? "s" : ""} free
+                      </span>
+                    </h3>
+                    {dayVotes.length === 0 ? (
+                      <p className="text-muted-foreground text-sm">No one selected this date</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {dayVotes.map(v => {
+                          const timeSlots = v.date_time_slots[expandedDate] ?? [];
+                          return (
+                            <li key={v.id} className="flex flex-wrap items-start gap-2">
+                              <FriendAvatar name={v.friend_name} />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-foreground">{v.friend_name}</p>
+                                {timeSlots.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {timeSlots.map(t => (
+                                      <span
+                                        key={t}
+                                        className="text-xs px-2 py-0.5 rounded-full font-medium"
+                                        style={{ backgroundColor: TIME_SLOT_STYLES[t]?.bg ?? "#f5f5f4", color: TIME_SLOT_STYLES[t]?.color ?? "#57534e" }}
+                                      >
+                                        {t}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {(v.preferred_places.length > 0 || v.preferred_food_types.length > 0) && (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {v.preferred_places.map(p => (
+                                      <span key={p} className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: PLACE_CHIP[p]?.bg ?? "#f5f5f4", color: PLACE_CHIP[p]?.color ?? "#57534e" }}>
+                                        {p}
+                                      </span>
+                                    ))}
+                                    {v.preferred_food_types.map(f => (
+                                      <span key={f} className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: FOOD_CHIP[f]?.bg ?? "#f5f5f4", color: FOOD_CHIP[f]?.color ?? "#57534e" }}>
+                                        {f}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </motion.div>
                 );
-              })}
-            </div>
-          ))}
+              })()}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          {/* Expanded date detail */}
-          {expandedDate && (() => {
-            const dayVotes = votes.filter(v => expandedDate in v.date_time_slots && v.date_time_slots[expandedDate].length > 0);
-            const d = new Date(`${expandedDate}T12:00:00`);
-            return (
-              <div className="mt-2 p-4 rounded-xl border border-orange-200 bg-orange-50 space-y-3">
-                <h3 className="font-semibold text-stone-900">
-                  {d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-                  <span className="ml-2 text-sm font-normal text-stone-500">
-                    {dayVotes.length} friend{dayVotes.length !== 1 ? "s" : ""} free
-                  </span>
-                </h3>
-                {dayVotes.length === 0 ? (
-                  <p className="text-stone-400 text-sm">No one selected this date</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {dayVotes.map(v => {
-                      const timeSlots = v.date_time_slots[expandedDate] ?? [];
-                      return (
-                        <li key={v.id} className="flex flex-wrap items-start gap-2">
-                          <FriendAvatar name={v.friend_name} />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-stone-900">{v.friend_name}</p>
-                            {timeSlots.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {timeSlots.map(t => (
-                                  <span
-                                    key={t}
-                                    className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                    style={{
-                                      backgroundColor: TIME_SLOT_STYLES[t]?.bg ?? "#f5f5f4",
-                                      color: TIME_SLOT_STYLES[t]?.color ?? "#57534e",
-                                    }}
-                                  >
-                                    {t}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                            {(v.preferred_places.length > 0 || v.preferred_food_types.length > 0) && (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {v.preferred_places.map(p => (
-                                  <span
-                                    key={p}
-                                    className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                    style={{
-                                      backgroundColor: PLACE_CHIP[p]?.bg ?? "#f5f5f4",
-                                      color: PLACE_CHIP[p]?.color ?? "#57534e",
-                                    }}
-                                  >
-                                    {p}
-                                  </span>
-                                ))}
-                                {v.preferred_food_types.map(f => (
-                                  <span
-                                    key={f}
-                                    className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                    style={{
-                                      backgroundColor: FOOD_CHIP[f]?.bg ?? "#f5f5f4",
-                                      color: FOOD_CHIP[f]?.color ?? "#57534e",
-                                    }}
-                                  >
-                                    {f}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-            );
-          })()}
-        </div>
-      )}
-
-      {/* Legend — chart modes only */}
+      {/* Legend */}
       {viewMode !== "calendar" && (
         <div className="flex flex-wrap gap-3">
           {colorMode === "people"
             ? votes.map(v => (
-                <div key={v.friend_name} className="flex items-center gap-1.5 text-xs text-stone-600">
-                  <span
-                    className="w-3 h-3 rounded-full inline-block"
-                    style={{ backgroundColor: friendBg(v.friend_name) }}
-                  />
+                <div key={v.friend_name} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: friendBg(v.friend_name) }} />
                   {v.friend_name}
                 </div>
               ))
             : prefKeys.map(k => (
-                <div key={k} className="flex items-center gap-1.5 text-xs text-stone-600">
+                <div key={k} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span className="w-3 h-3 rounded-sm inline-block" style={{ backgroundColor: colorMap[k] }} />
                   {k}
                 </div>
@@ -606,21 +612,21 @@ export default function DashboardPage() {
 
       {/* Friend list */}
       <section className="space-y-3">
-        <h2 className="font-semibold text-stone-900">
+        <h2 className="font-semibold text-foreground">
           Responses{" "}
-          <span className="text-stone-400 font-normal">({votes.length}/{FRIENDS.length})</span>
+          <span className="text-muted-foreground font-normal">({votes.length}/{FRIENDS.length})</span>
         </h2>
         <ul className="space-y-2">
           {votes.map(v => {
             const dateCount = Object.keys(v.date_time_slots).length;
             const allSlots = [...new Set(Object.values(v.date_time_slots).flat())];
             return (
-              <li key={v.id} className="rounded-xl border border-stone-200 bg-white px-4 py-3 flex items-start gap-3">
+              <li key={v.id} className="rounded-xl border border-border bg-card px-4 py-3 flex items-start gap-3 shadow-sm">
                 <FriendAvatar name={v.friend_name} />
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium text-stone-900">{v.friend_name}</p>
+                  <p className="font-medium text-foreground">{v.friend_name}</p>
                   {dateCount > 0 && (
-                    <p className="text-xs text-stone-400 mt-0.5">
+                    <p className="text-xs text-muted-foreground mt-0.5">
                       {dateCount} date{dateCount !== 1 ? "s" : ""}
                       {allSlots.length > 0 && <> · {allSlots.join(", ")}</>}
                     </p>
@@ -628,26 +634,12 @@ export default function DashboardPage() {
                   {(v.preferred_places.length > 0 || v.preferred_food_types.length > 0) && (
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {v.preferred_places.map(p => (
-                        <span
-                          key={p}
-                          className="text-xs px-2 py-0.5 rounded-full font-medium"
-                          style={{
-                            backgroundColor: PLACE_CHIP[p]?.bg ?? "#f5f5f4",
-                            color: PLACE_CHIP[p]?.color ?? "#57534e",
-                          }}
-                        >
+                        <span key={p} className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: PLACE_CHIP[p]?.bg ?? "#f5f5f4", color: PLACE_CHIP[p]?.color ?? "#57534e" }}>
                           {p}
                         </span>
                       ))}
                       {v.preferred_food_types.map(f => (
-                        <span
-                          key={f}
-                          className="text-xs px-2 py-0.5 rounded-full font-medium"
-                          style={{
-                            backgroundColor: FOOD_CHIP[f]?.bg ?? "#f5f5f4",
-                            color: FOOD_CHIP[f]?.color ?? "#57534e",
-                          }}
-                        >
+                        <span key={f} className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: FOOD_CHIP[f]?.bg ?? "#f5f5f4", color: FOOD_CHIP[f]?.color ?? "#57534e" }}>
                           {f}
                         </span>
                       ))}
@@ -658,11 +650,11 @@ export default function DashboardPage() {
             );
           })}
           {pending.map(f => (
-            <li key={f} className="rounded-xl border border-stone-100 px-4 py-3 flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-400">
+            <li key={f} className="rounded-xl border border-border px-4 py-3 flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground">
                 {f.slice(0, 2).toUpperCase()}
               </div>
-              <span className="text-stone-400 text-sm">{f}</span>
+              <span className="text-muted-foreground text-sm">{f}</span>
             </li>
           ))}
         </ul>

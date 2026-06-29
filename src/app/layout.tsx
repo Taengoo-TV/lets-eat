@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "react-day-picker/style.css";
+import { Providers } from "@/components/providers";
+import { Navbar } from "@/components/navbar";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -29,9 +31,17 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
+      className={`${geistSans.variable} ${geistMono.variable}`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-[100dvh] flex flex-col antialiased bg-background text-foreground">
+        <Providers>
+          <Navbar />
+          <div className="flex-1 pb-14 sm:pb-0">
+            {children}
+          </div>
+        </Providers>
+      </body>
     </html>
   );
 }
